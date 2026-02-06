@@ -6,6 +6,7 @@
 #include <set>
 
 
+
 enum class GAMETAG {PLAYER, BULLET, ENEMY};
 enum class COLLISIONBOXORIGIN {TOPLEFT, CENTER};
 enum class COLLISIONTYPE {BOX, POINT, CIRCLE, NONE};
@@ -13,6 +14,10 @@ enum class COLLISIONTYPE {BOX, POINT, CIRCLE, NONE};
 enum class WORLD_GROUP {PLAYER=0, ENEMY=1, WALL=2, BULLET=3, OTHER=4};
 const int SCREEN_WIDTH = 800;
 const int SCREEN_HEIGHT = 600;
+
+// If true, bullets will damage ALL gamaeobjects they hit instead of just the first one
+const bool BULLETS_DAMAGE_ALL = false;
+
 
 sf::RenderWindow* window;
 const sf::Color regionNormalColor = sf::Color(219, 235, 52);
@@ -40,6 +45,11 @@ class GameObject
 
         GAMETAG getTag() { return this->tag; }
         virtual std::string debugInfo() = 0; // Force override
+
+        virtual void TakeDamage(float damage)
+        {
+            std::cout << this->debugInfo() << " was hit\n";
+        }
          
         // Establishes boundaries of collision box
         void setCollisionAs_Box(float w, float h, COLLISIONBOXORIGIN o)
@@ -48,11 +58,7 @@ class GameObject
             this->collisionType = COLLISIONTYPE::BOX;
             this->colBox_Width = w;
             this->colBox_Height = h;
-        }
-
-        virtual void TakeDamage(float damage)
-        {
-            std::cout << this->debugInfo() << " was hit\n";
+            this->collisionIsSetup = true;
         }
 
         // Establishes boundaries of collision circle
@@ -60,11 +66,13 @@ class GameObject
         {
             this->collisionType = COLLISIONTYPE::CIRCLE;
             this->colCircle_radius = radius;
+            this->collisionIsSetup = true;
         }
 
         void setCollisionAs_Pt()
         {
             this->collisionType = COLLISIONTYPE::POINT;
+            this->collisionIsSetup = true;
         }
 
 
@@ -204,6 +212,29 @@ class GameObject
             else if (collisionType == COLLISIONTYPE::POINT) return std::vector<sf::Vector2f>{getPosition()};
             else throw std::runtime_error("Collision not set up!");
         }
+
+        // Returns true if colliding with any in list
+        bool CheckForCollisionsAny(std::vector<GameObject*> list)
+        {
+            if (!collisionIsSetup) throw std::runtime_error("Collision is not set up for Gameobject!");
+            for (GameObject* g : list)
+            {
+                if (this->isCollidingWith(g)) return true;
+            }
+            return false;
+        }
+
+        // Returns a list of all GameObjects in list it is colliding with. Returns an empty vector if none.
+        std::vector<GameObject*> GetCollisionsAll(std::vector<GameObject*> list)
+        {
+            if (!collisionIsSetup) throw std::runtime_error("Collision is not set up for Gameobject: " + this->debugInfo());
+            std::vector<GameObject*> out;
+            for (GameObject* g : list)
+            {
+                if (this->isCollidingWith(g)) out.push_back(g);
+            }
+            return out;
+        }
     protected:
         GAMETAG tag;
     private:
@@ -287,12 +318,13 @@ public:
             sf::Vector2i coords = index2Coords(i);
             std::cout << "CELL " << coords.y << ", " << coords.x << ": " << _grid[i].isActive << "\n";
             std::cout << "groupnames size: " << _grid[i].groupNames.size() << "\n";
+            std::cout << "groups size: " << _grid[i].groups.size() << "\n";
             std::cout << "groups: ";
             for (int j = 0; j < _grid[i].groups.size(); j++)
             {
                 std::cout << "[[GROUP " << _grid[i].groupNames[j] << "]],";
             }
-            std::cout << "Groups are done\n";
+            std::cout << "\n";
             // For groups
             for (int j = 0; j < _grid[i].groups.size(); j++)
             {
@@ -447,6 +479,7 @@ class GridGameObject : public GameObject
             gridPartitions = grid->PlaceInPartitions(this);
             
         }
+
 };
 
 class Bullet : public GridGameObject
@@ -458,12 +491,14 @@ public:
     sf::Vector2f v;
     GameObject* owner;
     std::vector<WORLD_GROUP> canDamage;
+    float bulletDamageAmount;
 
     // Settings
 
     // COLLISION LAYER is which layer can be hurt by this type of bullet
-    Bullet(sf::Vector2f velocity, sf::Vector2f pos, int count, Grid* g, std::vector<WORLD_GROUP> _canDamage, GameObject* _owner = nullptr)
+    Bullet(float _damageAmt, sf::Vector2f velocity, sf::Vector2f pos, int count, Grid* g, std::vector<WORLD_GROUP> _canDamage, GameObject* _owner = nullptr)
     {
+        this->bulletDamageAmount = _damageAmt;
         this->group = WORLD_GROUP::BULLET;
         this->setCollisionAs_Pt();
         this->canDamage = _canDamage;
@@ -480,30 +515,7 @@ public:
 
     std::string debugInfo() override
     {
-        return "Bullet";
-    }
-
-    // Returns true if colliding with any in list
-    bool CheckForCollisionsAny(std::vector<GameObject*> list)
-    {
-        if (!collisionIsSetup) throw std::runtime_error("Collision is not set up for Gameobject!");
-        for (GameObject* g : list)
-        {
-            if (this->isCollidingWith(g)) return true;
-        }
-        return false;
-    }
-
-    // Returns a list of all GameObjects in list it is colliding with. Returns an empty vector if none.
-    std::vector<GameObject*> GetCollisionsAll(std::vector<GameObject*> list)
-    {
-        if (!collisionIsSetup) throw std::runtime_error("Collision is not set up for Gameobject!");
-        std::vector<GameObject*> out;
-        for (GameObject* g : list)
-        {
-            if (this->isCollidingWith(g)) out.push_back(g);
-        }
-        return out;
+        return "Bullet" + id;
     }
 
     int Update(float dt)
@@ -518,7 +530,36 @@ public:
             // Remove from partitions
             return -1; // Signal to BulletManager to delete this
         }
-        // Check for collisions with player
+        // COLLISION STUFF
+        //GET THE GRID SUBINDEX
+        int _gridindex = *this->gridPartitions.begin(); // It will only be in one since bullet is special case
+        
+        //Check colliding with target
+        for (WORLD_GROUP w_group : canDamage)
+        {
+            // This is everything to check collisions with
+            std::vector<GameObject*> collection = this->grid->getByIndex(_gridindex).getGroup(static_cast<int>(w_group));
+            // This is the subset containing all objects we are colliding with
+            std::vector<GameObject*> colliding = this->GetCollisionsAll(collection);
+            if (colliding.size() > 0)
+            {
+                if (BULLETS_DAMAGE_ALL)
+                {
+                    for (GameObject* g : colliding)
+                    {
+                        g->TakeDamage(bulletDamageAmount);
+                    }
+                    return -1;
+                }
+                else
+                {
+                    colliding[0]->TakeDamage(bulletDamageAmount);
+                    return -1;
+                }
+            }
+            
+        }
+        
 
         return 0;
     }
@@ -551,8 +592,8 @@ class BulletManager
         void createBullet(int bulletType, sf::Vector2f pos, sf::Vector2f dir, GameObject* owner)
         {
             Bullet* b;
-            if (bulletType == 0) b = new Bullet(dir * 600.0f, pos, getBulletCount(0), grid, std::vector<WORLD_GROUP>{WORLD_GROUP::ENEMY}, owner);
-            else if (bulletType == 1) b = new Bullet(dir * 600.0f , pos, getBulletCount(1), grid, std::vector<WORLD_GROUP>{WORLD_GROUP::PLAYER}, owner);
+            if (bulletType == 0) b = new Bullet(10, dir * 600.0f, pos, getBulletCount(0), grid, std::vector<WORLD_GROUP>{WORLD_GROUP::ENEMY}, owner);
+            else if (bulletType == 1) b = new Bullet(10, dir * 600.0f , pos, getBulletCount(1), grid, std::vector<WORLD_GROUP>{WORLD_GROUP::PLAYER}, owner);
             else throw std::invalid_argument("Invalid bullet type");
 
             addBullet(bulletType, b);
