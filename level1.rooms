@@ -1,0 +1,32 @@
+STARTFILE
+name="Test level";
+description="Test level";
+roomwidth = 800;
+roomheight = 576;
+gridSize = 32; //pixels
+
+STARTBLOCK
+name="startBlock";
+bg=grass;
+description="";
+right="riverplace"
+
+Enemy(x=100, y=200);
+Enemy360Shot(x=200, y=200);
+Coin(x=100, 100);
+
+
+ENDBLOCK
+
+STARTBLOCK
+name="riverplace";
+bg=sand;
+description="";
+
+Coin(x=200, 100);
+Coin(x=232, 100);
+
+
+ENDBLOCK
+
+ENDFILE
