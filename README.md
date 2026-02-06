@@ -7,4 +7,4 @@ Todo
 - Random generation(?) (rooms you go to by moving off side/top?)
 
 Each screen in game is called "room"
-software to make levels will be called "ROOMMAKER"
+software to make levels will be called "ROOMSMAKER"
