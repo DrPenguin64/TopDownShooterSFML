@@ -6,7 +6,8 @@
 #include <set>
 
 
-enum GAMETAG {PLAYER, BULLET, ENEMY};
+enum class GAMETAG {PLAYER, BULLET, ENEMY};
+enum class COLLISION_LAYER {PLAYER, ENEMY};
 const int SCREEN_WIDTH = 800;
 const int SCREEN_HEIGHT = 600;
 
@@ -25,10 +26,9 @@ class GameObject
 {
     public:
         
-        GAMETAG getTag() {return this->tag;}
-        virtual std::string debugInfo() const {
-            return "null";
-        }
+        GAMETAG getTag() { return this->tag; }
+        virtual std::string debugInfo() = 0; // Force override
+
         sf::Vector2f getPosition()
         {
             return position;
@@ -43,9 +43,12 @@ class GameObject
         {
             setPosition(getPosition() + vector);
         }
-        void Update(float dt);
+        virtual int Update(float dt)
+        {
+            return 0;
+        }
         //virtual void Draw();
-        std::vector<sf::Vector2f> GetBounds()
+        virtual std::vector<sf::Vector2f> GetBounds()
         {
             return std::vector<sf::Vector2f>({ getPosition() });
         }
@@ -53,31 +56,6 @@ class GameObject
         GAMETAG tag;
     private:
         sf::Vector2f position;
-};
-
-class Enemy : public GameObject
-{
-    public:
-        float r_Size = 64;
-        void Draw()
-        {
-            sf::RectangleShape r = sf::RectangleShape(sf::Vector2f({ r_Size, r_Size }));
-            r.setFillColor(sf::Color::Yellow);
-            //r.setOutlineThickness(2.0f);
-            r.setOrigin(sf::Vector2f({ r_Size / 2, r_Size / 2 }));
-            r.setPosition(getPosition());
-            window->draw(r);
-
-        }
-        bool collidesWithPt(sf::Vector2f pt)
-        {
-            sf::RectangleShape r = sf::RectangleShape(sf::Vector2f({ r_Size, r_Size }));
-            //r.setFillColor(sf::Color::Yellow);
-            //r.setOutlineThickness(2.0f);
-            r.setOrigin(sf::Vector2f({ r_Size / 2, r_Size / 2 }));
-            r.setPosition(getPosition());
-            return r.getGlobalBounds().contains(pt);
-        }
 };
 
 struct GridCell
@@ -261,7 +239,7 @@ class GridGameObject : public GameObject
         Grid* grid;
         std::set<int> gridPartitions = std::set<int>({}); // Stores which current partitions this is in
 
-        void Init(Grid* g)
+        virtual void Init(Grid* g)
         {
             grid = g;
         }
@@ -288,22 +266,28 @@ class Bullet : public GridGameObject
 public:
     //static int count;
     int id;
-    sf::Vector2f dir;
-    float spd = 600.0f;
+    sf::Vector2f v;
+    GameObject* owner;
+    std::vector<COLLISION_LAYER> canDamage;
 
-    Bullet(sf::Vector2f d, sf::Vector2f pos, int count, Grid* g)
+    // Settings
+
+    // COLLISION LAYER is which layer can be hurt by this type of bullet
+    Bullet(sf::Vector2f velocity, sf::Vector2f pos, int count, Grid* g, std::vector<COLLISION_LAYER> _canDamage, GameObject* _owner = nullptr)
     {
+        this->canDamage = _canDamage;
+        this->owner = _owner;
         this->tag = GAMETAG::BULLET;
         this->grid = g;
         id = count;
         setPosition(pos);
-        dir = d;
+        v = velocity;
         count += 1;
-        std::cout << "Bullet[" << id << "]" << " with dir " << dir.x << "," << dir.y << "\n";
+        std::cout << "Bullet[" << id << "]" << " with velocity " << v.x << "," << v.y << "\n";
         
     }
 
-    std::string debugInfo() const override
+    std::string debugInfo() override
     {
         return "Bullet";
     }
@@ -312,14 +296,14 @@ public:
     {
         //this->position.x += spd;
         // 
-        setPosition(getPosition() + dir * (spd * dt)); //cant use this version because it will try to move it to a partition off the screen
+        setPosition(getPosition() + v * dt); //cant use this version because it will try to move it to a partition off the screen
 
         sf::Vector2f position = getPosition();
         if (position.y < 0 || position.x < 0 || position.x > SCREEN_WIDTH || position.y > SCREEN_HEIGHT)
         {
             // Remove from partitions
-            grid->RemoveFromPartitions(this, this->gridPartitions);
-            return -1; // delete
+            //grid->RemoveFromPartitions(this, this->gridPartitions);
+            return -1; // Signal to BulletManager to delete this
         }
         //std::cout << "Update bullet position " << position.x << "," << position.y << "\n";
         return 0;
@@ -336,6 +320,86 @@ public:
     }
 };
 
+// One instance of this in game
+class BulletManager
+{
+    private: 
+        std::vector<Bullet*> playerBullets;
+        std::vector<Bullet*> enemyBullets;
+
+    public:
+        Grid* grid;
+
+
+        void createBullet(int bulletType, sf::Vector2f pos, sf::Vector2f dir, GameObject* owner)
+        {
+            Bullet* b;
+            if (bulletType == 0) b = new Bullet(dir * 600.0f, pos, getBulletCount(0), grid, std::vector<COLLISION_LAYER>{COLLISION_LAYER::ENEMY}, owner);
+            else if (bulletType == 1) b = new Bullet(dir * 800.0f , pos, getBulletCount(1), grid, std::vector<COLLISION_LAYER>{COLLISION_LAYER::PLAYER}, owner);
+            else throw std::invalid_argument("Invalid bullet type");
+
+            addBullet(bulletType, b);
+        }
+
+        void DrawBullets()
+        {
+            for (auto& b : playerBullets)
+            {
+                b->Draw();
+            }
+
+            for (auto& b : enemyBullets)
+            {
+                b->Draw();
+            }
+        }
+
+        // 0 = player, 1 = enemy
+        int getBulletCount(int type)
+        {
+            if (type == 0) return playerBullets.size();
+            else if (type == 1) return enemyBullets.size();
+            else return -1;
+        }
+        // collectionId: 0=player, 1= enemy
+        int addBullet(int collectionId, Bullet* b)
+        {
+            if (collectionId == 0) playerBullets.push_back(b);
+            else if (collectionId == 1) enemyBullets.push_back(b);
+            else return -1;
+            return 0;
+        }
+
+        void UpdateBullets(std::vector<Bullet*>& collection, float dt)
+        {
+            for (auto it = collection.begin(); it != collection.end(); /* no increment here */) {
+                int result = (*it)->Update(dt); // Update now returns int
+                if (result == -1) { // Delete bullets that return -1 (delete flag)
+                    (*it)->grid->RemoveFromPartitions((*it), (*it)->gridPartitions);
+
+                    it = collection.erase(it); // erase returns the next valid iterator
+                }
+                else {
+                    ++it; // only increment if not erased
+                }
+            }
+        }
+
+        int Update(float dt)
+        {
+            UpdateBullets(playerBullets, dt);
+            UpdateBullets(enemyBullets, dt);
+            return 0;
+        }
+
+        void Init(Grid* g)
+        {
+            this->grid = g;
+            playerBullets.clear();
+            //std::vector<Bullet*> enemyBullets;
+        }
+};
+
 class Player : public GridGameObject
 {
 private:
@@ -346,23 +410,26 @@ public:
     sf::Angle gunRot;
     const float movSpd = 300.0f;
     const float strafeSpd = 300.0f;
-    std::vector<Bullet*> bullets;
+    BulletManager* bulletManager;
+    //std::vector<Bullet*> bullets;
 
-    std::string debugInfo() const override
+    std::string debugInfo() override
     {
         return "Player";
     }
 
-    void Init(Grid* g)
+    void Init(Grid* g, BulletManager* b)
     {
+        this->bulletManager = b;
         this->tag = GAMETAG::PLAYER;
         GridGameObject::Init(g);
         
         setPosition(sf::Vector2f({ SCREEN_WIDTH / 2, SCREEN_HEIGHT / 2 }));
         gunRot = sf::degrees(360);
+        std::cout << "Bulletmanager is null? " << (bulletManager == nullptr) << "\n";
     }
 
-    void Update(float dt)
+    int Update(float dt) override
     {
         float inputX = 0;
         float inputY = 0;
@@ -395,40 +462,26 @@ public:
 
         // Run update on any bullets
         
-        for (auto it = bullets.begin(); it != bullets.end(); /* no increment here */) {
-            int result = (*it)->Update(dt); // Update now returns int
-            if (result == -1) {
-                (*it)->grid->RemoveFromPartitions((*it), (*it)->gridPartitions);
-                it = bullets.erase(it); // erase returns the next valid iterator
-            }
-            else {
-                ++it; // only increment if not erased
-            }
-        }
         
+        return 0;
     }
-
+    
     void OnFireButtonPress()
     {
         // spawn bullet
-        //std::cout << "Fire bullet!\n";
-        /*bullets.push_back(std::make_unique<Bullet>(
-            lastDir,
-            getPosition(),
-            bullets.size(),
-            grid
-        )); */
-        Bullet* b = new Bullet(lastDir, getPosition(), bullets.size(), grid);
-        bullets.push_back(b);
+        //Bullet* b = new Bullet(lastDir, , bulletManager->getBulletCount(0), grid, std::vector<COLLISION_LAYER>{COLLISION_LAYER::ENEMY}, this);
+        bulletManager->createBullet(0, getPosition(), lastDir, this);
+        //bulletManager->addBullet(0, b); 
     }
 
+    /*
     void DrawBullets()
     {
         for (auto& b : bullets)
         {
             b->Draw();
         }
-    }
+    }*/
 
     void Draw()
     {
@@ -452,11 +505,105 @@ public:
 
     }
 };
+class Enemy : public GridGameObject
+{
+public:
+    float r_Size = 64;
+    GAMETAG tag = GAMETAG::ENEMY;
+    float y_center;
+    Player* player;
+    BulletManager* bulletManager;
+
+
+    float y;
+    float _timer;
+    float fireTimer; // counter
+
+
+    // Settings
+    float amplitude = 200;
+    float timeScale = 1;
+    float fireWaitTime = 0.1f; // Seconds
+    float distanceToFire = 64;
+
+
+    void Init(Grid* g, sf::Vector2f startPos, Player* _player, BulletManager* b)
+    {
+        bulletManager = b;
+        player = _player;
+        GridGameObject::Init(g);
+        setPosition(startPos);
+        y_center = getPosition().y;
+        y = y_center;
+        _timer = 0;
+        fireTimer = fireWaitTime; // Allowed to fire immediately
+    }
+
+    std::string debugInfo() { return "Enemy"; }
+
+
+    void Draw()
+    {
+        sf::RectangleShape r = sf::RectangleShape(sf::Vector2f({ r_Size, r_Size }));
+        r.setFillColor(sf::Color::Yellow);
+        //r.setOutlineThickness(2.0f);
+        r.setOrigin(sf::Vector2f({ r_Size / 2, r_Size / 2 }));
+        r.setPosition(getPosition());
+        window->draw(r);
+
+    }
+
+    int Update(float dt) override
+    {
+        //std::cout << "In enemy update\n";
+        y = y_center + amplitude*std::sin(_timer*timeScale);
+        this->setPosition(sf::Vector2f{ getPosition().x, y });
+        
+        if (std::abs(y - player->getPosition().y) <= distanceToFire && fireTimer >= fireWaitTime)
+        {
+            Fire();
+        }
+        else fireTimer += dt;
+        
+
+        _timer += dt;
+        return 0;
+
+    }
+
+    void Fire()
+    {
+        fireTimer = 0;
+        std::cout << "Enemy fire bullet!";
+        sf::Vector2f _dir{ 0,0 };
+        if (player->getPosition().x <= getPosition().x) _dir.x = -1;
+        else _dir.x = 1;
+
+        
+        bulletManager->createBullet(1, getPosition(), _dir, this);
+        //EnemyBulletManager.SpawnBullet
+    }
+
+    bool collidesWithPt(sf::Vector2f pt)
+    {
+        sf::RectangleShape r = sf::RectangleShape(sf::Vector2f({ r_Size, r_Size }));
+        //r.setFillColor(sf::Color::Yellow);
+        //r.setOutlineThickness(2.0f);
+        r.setOrigin(sf::Vector2f({ r_Size / 2, r_Size / 2 }));
+        r.setPosition(getPosition());
+        return r.getGlobalBounds().contains(pt);
+    }
+};
+
+
+
+
 // References
 sf::Clock game_clock;
 Player player;
 Enemy enemy;
 Grid grid;
+BulletManager* bulletManager;
 //Enemy enem1;
 //Enemy enem2;
 
@@ -469,9 +616,12 @@ void Init()
 
     window = new sf::RenderWindow(sf::VideoMode({ SCREEN_WIDTH, SCREEN_HEIGHT }), "TOP DOWN SHOOTER");
     grid.Generate(SCREEN_WIDTH, SCREEN_HEIGHT, 2, 1);
-    player.Init(&grid);
-    enemy.setPosition(player.getPosition() + sf::Vector2f({ 200, 0 }));
 
+    bulletManager = new BulletManager();
+    bulletManager->Init(&grid);
+    player.Init(&grid, bulletManager);
+    enemy.Init(&grid, player.getPosition() + sf::Vector2f{ 200, 0 }, &player, bulletManager);
+    
 }
 
 void Update(float dt)
@@ -486,10 +636,11 @@ void Update(float dt)
     std::cout << "\n";*/
     int _ind = *player.gridPartitions.begin();
     //std::cout << "Isactive: " << player.grid->getByIndex(_ind).isActive << "\n";
-    grid.printDebug();
-    GameObject* p = &player;
-    std::cout << p->debugInfo() << "\n";
-    //enemy.Update(dt);
+    //grid.printDebug();
+    //GameObject* p = &player;
+    //std::cout << p->debugInfo() << "\n";
+    enemy.Update(dt);
+    bulletManager->Update(dt);
 }
 
 void RenderGrid()
@@ -498,7 +649,7 @@ void RenderGrid()
     sf::RectangleShape r1(sf::Vector2f({ SCREEN_WIDTH / 2, SCREEN_HEIGHT / 2 }));
     r1.setFillColor(regionActiveColor);
     r1.setPosition(sf::Vector2f(0,0));
-    r1.setOutlineThickness(1.0f);
+    r1.setOutlineThickness(1.0f); 
     r1.setOutlineColor(sf::Color::Black);
     window->draw(r1);
     
@@ -524,7 +675,8 @@ void Draw()
     //RenderGrid();
     player.Draw();
     enemy.Draw();
-    player.DrawBullets();
+    bulletManager->DrawBullets();
+    //player.DrawBullets();
 
 }
 
