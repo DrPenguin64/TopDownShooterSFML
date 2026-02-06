@@ -4,3 +4,4 @@ Todo
 - refactor controls to allow twin stick controls
 - load map from file
 - (level editor?)
+- Random generation(?) (rooms you go to by moving off side/top?)
